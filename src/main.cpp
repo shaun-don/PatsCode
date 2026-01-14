@@ -43,12 +43,30 @@ void setup() {
         M5.Display.println("IMU Init Failed!");
         while (1) delay(1);
     }
-    calibrateMagnetometer();
+    //calibrateMagnetometer();
 }
 
 void loop() {
+    M5.update();
+
+    if (M5.Touch.getCount() > 0) {
+        auto detail = M5.Touch.getDetail(0); // Get details for the first touch point
+
+        // Check if the touch state is 'pressed' or 'touching'
+        if (detail.isPressed()) {
+            int x = detail.x;
+            int y = detail.y;
+
+            // Define the "middle" area (Screen is 320x240)
+            if (x > 110 && x < 210 && y > 70 && y < 170) {
+                calibrateMagnetometer();
+            }
+        }
+    }
+
     M5.Imu.update();
     auto data = M5.Imu.getImuData();
+
 
     // 1. SWAPPED PITCH/ROLL FOR CORES3 ORIENTATION
     // Roll (Tilting side-to-side)
