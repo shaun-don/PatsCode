@@ -1,9 +1,23 @@
 #include <M5Unified.h>
+#include <SPI.h>
+#include <SD.h>
 #include <math.h>
 
+// --- STORAGE CONFIGURATION ---
+#define MAX_SAMPLES 500  
+struct IMUDataEntry {
+    uint32_t timestamp; // Time in milliseconds
+    float heading, pitch, roll;
+    float accX, accY, accZ;
+    float gyroX, gyroY, gyroZ;
+};
+
+IMUDataEntry dataLog[MAX_SAMPLES];
+int logIndex = 0;
+bool bufferFull = false;
+
+
 float magOffsetX = 0, magOffsetY = 0, magOffsetZ = 0;
-
-
 void calibrateMagnetometer() {
     M5.Display.fillScreen(BLUE);
     M5.Display.setCursor(10, 80);
@@ -32,34 +46,81 @@ void calibrateMagnetometer() {
     M5.Display.fillScreen(BLACK);
 }
 
+// --- SD CARD FUNCTION ---
+void saveLogToSD() {
+    M5.Display.fillScreen(BLACK);
+    M5.Display.setCursor(10, 100);
+    M5.Display.println("SAVING TO SD...");
+
+    // Create a unique filename or overwrite existing
+    File file = SD.open("/imu_log.csv", FILE_WRITE);
+
+    if (file) {
+        // Updated CSV Header with Timestamp
+        file.println("Timestamp_ms,Heading,Pitch,Roll,AccX,AccY,AccZ,GyroX,GyroY,GyroZ");
+
+        int totalSamples = bufferFull ? MAX_SAMPLES : logIndex;
+
+        for (int i = 0; i < totalSamples; i++) {
+            file.printf("%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
+                        dataLog[i].timestamp, dataLog[i].heading, 
+                        dataLog[i].pitch, dataLog[i].roll,
+                        dataLog[i].accX, dataLog[i].accY, dataLog[i].accZ,
+                        dataLog[i].gyroX, dataLog[i].gyroY, dataLog[i].gyroZ);
+        }
+        file.close();
+        M5.Display.println("SAVE SUCCESS!");
+    } else {
+        M5.Display.setTextColor(RED);
+        M5.Display.println("SD SAVE FAILED!");
+        M5.Display.setTextColor(WHITE);
+    }
+    delay(2000);
+    M5.Display.fillScreen(BLACK);
+}
+
+// Function updated to accept timestamp
+void storeData(uint32_t ts, float h, float p, float r, m5::imu_3d_t a, m5::imu_3d_t g) {
+    dataLog[logIndex] = {ts, h, p, r, a.x, a.y, a.z, g.x, g.y, g.z};
+    logIndex++;
+    if (logIndex >= MAX_SAMPLES) {
+        logIndex = 0;
+        bufferFull = true;
+    }
+}
+
+// ... (calibrateMagnetometer function stays the same) ...
+
 void setup() {
     auto cfg = M5.config();
-    cfg.internal_imu = true; // Ensure IMU is powered on
+    cfg.internal_imu = true; 
     M5.begin(cfg);
     M5.Display.setRotation(1);
     M5.Display.setTextSize(2);
+
+    // CoreS3 SD Initialization (CS Pin is 4)
+    if (!SD.begin(GPIO_NUM_4, SPI, 40000000)) {
+        M5.Display.println("SD Init Failed!");
+    }
 
     if (!M5.Imu.begin()) {
         M5.Display.println("IMU Init Failed!");
         while (1) delay(1);
     }
-    //calibrateMagnetometer();
 }
 
 void loop() {
     M5.update();
 
+    // Touch logic for Calibration (Center) and Save (Top Right)
     if (M5.Touch.getCount() > 0) {
-        auto detail = M5.Touch.getDetail(0); // Get details for the first touch point
-
-        // Check if the touch state is 'pressed' or 'touching'
+        auto detail = M5.Touch.getDetail(0);
         if (detail.isPressed()) {
-            int x = detail.x;
-            int y = detail.y;
-
-            // Define the "middle" area (Screen is 320x240)
-            if (x > 110 && x < 210 && y > 70 && y < 170) {
+            if (detail.x > 110 && detail.x < 210 && detail.y > 70 && detail.y < 170) {
                 calibrateMagnetometer();
+            }
+            if (detail.x > 240 && detail.y < 80) {
+                saveLogToSD();
             }
         }
     }
@@ -67,14 +128,10 @@ void loop() {
     M5.Imu.update();
     auto data = M5.Imu.getImuData();
 
-
-    // 1. SWAPPED PITCH/ROLL FOR CORES3 ORIENTATION
-    // Roll (Tilting side-to-side)
+    // Math for Heading/Pitch/Roll
     float rollRad = atan2(data.accel.x, data.accel.z);
-    // Pitch (Tilting front-to-back)
     float pitchRad = atan2(-data.accel.y, sqrt(data.accel.x * data.accel.x + data.accel.z * data.accel.z));
 
-    // 2. Tilt-Compensated Heading - Swapped x and y for correct heading
     float my = data.mag.x - magOffsetX;
     float mx = data.mag.y - magOffsetY;
     float mz = data.mag.z - magOffsetZ;
@@ -83,26 +140,21 @@ void loop() {
     float heading = atan2(magY_hor, magX_hor) * 180.0 / M_PI;
     if (heading < 0) heading += 360;
 
-    // --- DISPLAY OUTPUT ---
+    // --- STORE DATA WITH TIMESTAMP ---
+    storeData(millis(), heading, pitchRad * 180 / M_PI, rollRad * 180 / M_PI, data.accel, data.gyro);
+
+    // --- DISPLAY ---
     M5.Display.setCursor(10, 10);
-    
     M5.Display.setTextColor(YELLOW, BLACK);
-    M5.Display.printf("HEADING: %6.1f deg\n\n", heading);
+    M5.Display.printf("HEADING: %6.1f deg\n", heading);
+    M5.Display.setTextColor(GREEN, BLACK);
+    M5.Display.printf("TR: Save SD | Cnt: %d\n", bufferFull ? MAX_SAMPLES : logIndex);
 
     M5.Display.setTextColor(CYAN, BLACK);
-    M5.Display.printf("TILT DATA:\n");
-    M5.Display.printf(" Pitch: %6.1f\n", pitchRad * 180 / M_PI);
-    M5.Display.printf(" Roll:  %6.1f\n\n", rollRad * 180 / M_PI);
+    M5.Display.printf("TILT DATA:\n P: %6.1f R: %6.1f\n", pitchRad * 180 / M_PI, rollRad * 180 / M_PI);
 
-    // FIXED ACCELERATION DISPLAY
     M5.Display.setTextColor(WHITE, BLACK);
-    M5.Display.printf("ACCEL (G):\n");
-    M5.Display.printf(" X:%5.2f Y:%5.2f Z:%5.2f\n", data.accel.x, data.accel.y, data.accel.z);
-
-    // GYROSCOPE (Degrees Per Second)
-    // Values represent how fast the device is spinning around each axis
-    M5.Display.setTextColor(ORANGE, BLACK);
-    M5.Display.printf("GYRO\n X:%5.1f Y:%5.1f Z:%5.1f\n", data.gyro.x, data.gyro.y, data.gyro.z);
+    M5.Display.printf("ACCEL: %.2f %.2f %.2f\n", data.accel.x, data.accel.y, data.accel.z);
 
     delay(50);
 }
