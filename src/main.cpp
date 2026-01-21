@@ -4,7 +4,7 @@
 #include <math.h>
 
 // --- STORAGE CONFIGURATION ---
-#define MAX_SAMPLES 500  
+#define MAX_SAMPLES 1200  
 struct IMUDataEntry {
     uint32_t timestamp; // Time in milliseconds
     float heading, pitch, roll;
@@ -16,6 +16,26 @@ IMUDataEntry dataLog[MAX_SAMPLES];
 int logIndex = 0;
 bool bufferFull = false;
 
+
+const int btnX = 110, btnY = 180, btnW = 100, btnH = 40; // Positioned near bottom-middle
+void drawLoggingButton(bool bStop = true) {
+
+    if (bStop) {
+        M5.Display.fillRoundRect(btnX, btnY, btnW, btnH, 8, RED);
+        M5.Display.setTextColor(WHITE);
+        M5.Display.drawCenterString("STOP", btnX + (btnW / 2), btnY + 10);
+    } else {
+        M5.Display.fillRoundRect(btnX, btnY, btnW, btnH, 8, GREEN);
+        M5.Display.setTextColor(BLACK);
+        M5.Display.drawCenterString("START", btnX + (btnW / 2), btnY + 10);
+    }
+}
+
+void drawCalibrateButton() {
+        M5.Display.fillRoundRect(btnX, btnY-170, btnW+20, btnH, 8, GREEN);
+        M5.Display.setTextColor(BLACK);
+        M5.Display.drawCenterString("Calibrate", btnX + ((btnW+20) / 2), btnY -160);
+}
 
 float magOffsetX = 0, magOffsetY = 0, magOffsetZ = 0;
 void calibrateMagnetometer() {
@@ -62,11 +82,17 @@ void saveLogToSD() {
         int totalSamples = bufferFull ? MAX_SAMPLES : logIndex;
 
         for (int i = 0; i < totalSamples; i++) {
-            file.printf("%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
-                        dataLog[i].timestamp, dataLog[i].heading, 
-                        dataLog[i].pitch, dataLog[i].roll,
-                        dataLog[i].accX, dataLog[i].accY, dataLog[i].accZ,
-                        dataLog[i].gyroX, dataLog[i].gyroY, dataLog[i].gyroZ);
+            int index = i;
+            if (bufferFull)
+            {
+                // samples wrapped round array so start at current position and wrap
+                index = (logIndex + i) % MAX_SAMPLES;
+            }
+            file.printf("%u,%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n", index,
+                        dataLog[index].timestamp, dataLog[index].heading, 
+                        dataLog[index].pitch, dataLog[index].roll,
+                        dataLog[index].accX, dataLog[index].accY, dataLog[index].accZ,
+                        dataLog[index].gyroX, dataLog[index].gyroY, dataLog[index].gyroZ);
         }
         file.close();
         M5.Display.println("SAVE SUCCESS!");
@@ -90,6 +116,7 @@ void storeData(uint32_t ts, float h, float p, float r, m5::imu_3d_t a, m5::imu_3
 }
 
 // ... (calibrateMagnetometer function stays the same) ...
+static unsigned int lastMillis;
 
 void setup() {
     auto cfg = M5.config();
@@ -109,18 +136,36 @@ void setup() {
     }
 }
 
+bool bIsLogging = false;
+
 void loop() {
+    static bool bRedraw = true;
+
     M5.update();
 
     // Touch logic for Calibration (Center) and Save (Top Right)
     if (M5.Touch.getCount() > 0) {
         auto detail = M5.Touch.getDetail(0);
         if (detail.isPressed()) {
-            if (detail.x > 110 && detail.x < 210 && detail.y > 70 && detail.y < 170) {
+            if (detail.x > btnX && (detail.y > (btnY-170)) && (detail.y < (btnY-140))) {
                 calibrateMagnetometer();
+                bRedraw = true;
             }
-            if (detail.x > 240 && detail.y < 80) {
-                saveLogToSD();
+            if (detail.x > btnX && detail.y > btnY) {
+                if(!bIsLogging)
+                {
+                    logIndex = 0;
+                    bufferFull = false;
+                    bIsLogging = true;
+                    //lastMillis = millis();  // only an issue on first iteration which will never happen
+                    bRedraw = true;
+                }
+                else if (logIndex>10)
+                {
+                    saveLogToSD();
+                    bIsLogging = false;
+                    bRedraw = true;
+                }
             }
         }
     }
@@ -141,10 +186,26 @@ void loop() {
     if (heading < 0) heading += 360;
 
     // --- STORE DATA WITH TIMESTAMP ---
-    storeData(millis(), heading, pitchRad * 180 / M_PI, rollRad * 180 / M_PI, data.accel, data.gyro);
+    unsigned long int m = millis();
+    unsigned long int timestamp = m - lastMillis;
+    lastMillis = m;
+    if (timestamp<100) 
+    {
+        unsigned long int d =  100-timestamp;
+        delay(d);
+        lastMillis += d;
+        //timestamp = 100;
+    }
+    storeData(timestamp, heading, pitchRad * 180 / M_PI, rollRad * 180 / M_PI, data.accel, data.gyro);
 
     // --- DISPLAY ---
-    M5.Display.setCursor(10, 10);
+    if (bRedraw)
+    {
+        bRedraw = false;
+        drawLoggingButton(bIsLogging);
+        drawCalibrateButton();
+    }
+    M5.Display.setCursor(10, 80);
     M5.Display.setTextColor(YELLOW, BLACK);
     M5.Display.printf("HEADING: %6.1f deg\n", heading);
     M5.Display.setTextColor(GREEN, BLACK);
@@ -156,5 +217,5 @@ void loop() {
     M5.Display.setTextColor(WHITE, BLACK);
     M5.Display.printf("ACCEL: %.2f %.2f %.2f\n", data.accel.x, data.accel.y, data.accel.z);
 
-    delay(50);
+    //delay(50);
 }
