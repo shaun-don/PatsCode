@@ -77,7 +77,7 @@ void saveLogToSD() {
 
     if (file) {
         // Updated CSV Header with Timestamp
-        file.println("Timestamp_ms,Heading,Pitch,Roll,AccX,AccY,AccZ,GyroX,GyroY,GyroZ");
+        file.println("Sample,Timestamp_ms,Heading,Pitch,Roll,AccX,AccY,AccZ,GyroX,GyroY,GyroZ");
 
         int totalSamples = bufferFull ? MAX_SAMPLES : logIndex;
 
@@ -188,14 +188,15 @@ void loop() {
     // --- STORE DATA WITH TIMESTAMP ---
     unsigned long int m = millis();
     unsigned long int timestamp = m - lastMillis;
-    lastMillis = m;
     if (timestamp<100) 
     {
         unsigned long int d =  100-timestamp;
         delay(d);
-        lastMillis += d;
+        m = millis();
+        timestamp = m - lastMillis;
         //timestamp = 100;
     }
+    lastMillis = m;
     storeData(timestamp, heading, pitchRad * 180 / M_PI, rollRad * 180 / M_PI, data.accel, data.gyro);
 
     // --- DISPLAY ---
@@ -209,7 +210,7 @@ void loop() {
     M5.Display.setTextColor(YELLOW, BLACK);
     M5.Display.printf("HEADING: %6.1f deg\n", heading);
     M5.Display.setTextColor(GREEN, BLACK);
-    M5.Display.printf("TR: Save SD | Cnt: %d\n", bufferFull ? MAX_SAMPLES : logIndex);
+    M5.Display.printf("TR: Save SD | Cnt: %4d\n", bufferFull ? MAX_SAMPLES : logIndex);
 
     M5.Display.setTextColor(CYAN, BLACK);
     M5.Display.printf("TILT DATA:\n P: %6.1f R: %6.1f\n", pitchRad * 180 / M_PI, rollRad * 180 / M_PI);
